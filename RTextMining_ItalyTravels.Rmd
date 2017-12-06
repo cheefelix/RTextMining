@@ -1,0 +1,293 @@
+---
+title: "Text Mining in R"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# R Text Mining Workshop
+
+Scenario : The president of a travel company would like to know about the travel characteristics of Italy, i.e. activities/customer perspective on the destinations. He asks you to give him insights about Italy regions in 3 hours.
+
+You spent the first hour considering your ressources. You found an open source travel guide wikivoyage. It provides a data dump of its pages https://dumps.wikimedia.org/enwikivoyage/20170120/. You downloaded it and put each region content in a list called italy.
+
+### Load the scrapes of Wikitravels:
+
+```{r 1}
+load('workshop_data.RData')
+```
+
+### Contents
+
+Display the names of the 12 regions of Italy
+
+```{r}
+names(italy)
+```
+
+Shows the first region "Piedmont" description.
+
+As you can see, it's a messy text with symbols and numbers. 
+
+```{r}
+substr(italy[1], 1, 1000)
+```
+
+# The Right Tools
+
+The content is not really structured, the region descriptions are to be found across the different sections. To extract meaning, we will use techniques that represent documents as bag-of-words (documents are described based on the words that occur in them and how often they occur). Loading the Text Mining package.
+
+```{r}
+# Online Install
+# install.packages("devtools")
+# library(devtools)
+# install_version("tm", version = "0.6-2", repos = "http://cran.us.r-project.org")
+# install.packages("SnowballC")
+
+# load the package
+library(tm) #tm for text mining
+```
+
+```{r}
+# Check the version
+help(package="tm")
+```
+
+# Preprocessing : Data Cleaning
+
+First, we create a corpus (collection of documents that will be processed together):
+
+Each page scrape is represented as a document in a corpus. It reaches a bag-of-words form thanks to a tokenizer that splits the page strings in tokens/words (the basic principle being that a whitespace indicates a separation between tokens). Let us check how well it describes a simple example
+
+### Example 
+
+```{r}
+
+a_list_of_words <- c("cat cats cat, whiskers", "cat Cat dog parrot turtle", "cat ate dog")
+
+test_corpus <- Corpus(VectorSource(a_list_of_words))
+
+as.matrix(DocumentTermMatrix( test_corpus ) )
+
+#help(DocumentTermMatrix)
+          
+```
+
+The representation suggests that the second document is more related to the word “cat” than the first one. As seen, in order to reach a proper bag-of-words form, it is good practice to clean the input. Let us check the transformations available within the package :
+
+```{r}
+# Display the name of available transformations in the console
+getTransformations()
+
+```
+
+```{r}
+help("removeNumbers")  #Remove numbers from a text document.
+```
+
+
+### Transform your corpus
+
+```{r}
+# first assign it 
+corpus = Corpus(VectorSource( unlist(italy) ))
+```
+
+The cleaning starts now: 
+ 
+```{r}
+# Create a function that can replace matched regular expressions. content_transformer is used to apply any function taking string
+
+# as input and returning string on our corpus
+replacer <- content_transformer( function(x, pattern, replacement) gsub(pattern, replacement, x) )
+
+# help(content_transformer)
+# help(tm_map)
+
+# Remove unnecessary sections
+corpus <- tm_map(corpus, replacer, "Go next.*", " ")
+
+# Create function that lowers everything because 'House' and 'house' should count as the same unit
+lowerer <- content_transformer(function(x) tolower(x))
+
+# Lowers everything
+corpus <- tm_map(corpus, lowerer) # note : unecessary actually because of the tokenizer of tm package 
+
+# remove punctuations
+corpus <- tm_map(corpus, removePunctuation)
+
+# remove meaningless words
+corpus <- tm_map(corpus, removeWords, tm::stopwords("SMART"))
+
+# remove region names
+corpus <- tm_map(corpus,removeWords, tolower(names(italy)))
+
+# remove extra whitespace : note \n are removed 
+corpus <- tm_map(corpus, stripWhitespace)
+
+# Transform variations of same root into a single root ( ex: beaches -> beach, beach -> beach) 
+corpus <- tm_map(corpus, stemDocument,language="english")
+```
+
+The result:
+
+```{r}
+substr(as.character( corpus[[1]] ), 1, 2000 )
+
+## view all
+# as.character(corpus[[1]])
+
+# typeof(corpus)
+# corpus is a list of text, changing it to character to view it in R
+```
+
+# Define the right bag of words
+
+We want to keep the words that are meaningful and that will help describe and compare the regions. Let us first create a DocumentTerm matrix with this corpus.
+
+```{r}
+# Bag of word representation of the corpus
+dtm = DocumentTermMatrix(corpus)
+```
+
+Words with frequency more than 30
+
+```{r}
+# Words that occurs more than 30 times
+findFreqTerms(dtm, lowfreq=30)
+```
+
+We have selected words that seem meaningful and group synonyms together (for instance duomo is an italian cathedral chuch and should count as the same thing as a cathedral or church). The result is available in the dictionary provided. Let us transform synonyms into a single form
+
+```{r}
+replace.synonyms<-function(x,dictionary) {
+  for (main in names(dictionary)) {
+    for (syn in dictionary[[main]]) {
+      x=gsub(paste("",syn,""),paste("",main,""),x)
+    }
+  }
+  return(x)
+}
+
+# Transform synonymns into one single form
+corpus <- tm_map(corpus,content_transformer(replace.synonyms),dictionary)
+```
+
+# Computing term frequencies
+
+Let us create a bag-of-words representation of our documents with the meaningful terms we have kept
+
+```{r}
+options(digits=3)
+
+#Compute the term frequencies, filtered
+dtm <- DocumentTermMatrix(corpus, control=list(dictionary=names(dictionary)))
+rownames(dtm) <- names(italy)  #give documents their names
+
+#display it
+mat <- as.matrix(dtm)
+mat[,1:10]
+
+```
+
+
+# Topic / Theme Extraction
+
+The features are quite granular. Besides, some words are similar to one another. For instance, if a destination is historical, the word ancient is likely to appear is well. Let us check if some words are correlated. If this is the case, we might attempt to reduce all our words to a smaller set of topics or themes.
+
+# Correlation Heat Map
+
+To compute correlation in R, we use the command cor(). It will return a matrix with the correlation coefficients.
+
+```{r}
+cor.mat <- cor(mat)
+# plot_df <- cor(df[-1])
+head(cor.mat)
+```
+
+Visualise the histogram using basic R function
+
+```{r}
+image(cor.mat, axes=F)
+axis(1, at=seq(0,1,length.out=length(colnames(cor.mat))),labels=colnames(cor.mat),las=2)
+axis(2, at=seq(0,1,length.out=length(colnames(cor.mat))),labels=colnames(cor.mat),las=1)
+
+```
+
+R provides other graphic tools. Using ggplot2, we need to change the input format, with melt:
+
+```{r}
+# install.packages("reshape2")
+suppressPackageStartupMessages(library(reshape2))
+
+melted.df <- data.frame(melt(cor.mat))
+
+head(melted.df)
+
+```
+
+A better visualisation
+
+```{r}
+# install.packages("ggplot2")
+suppressPackageStartupMessages(library(ggplot2))
+
+qplot(x=Var1, y=Var2, data=melted.df,fill=value, geom="tile") + theme(axis.text.x = element_text(angle = 90, hjust = 1));
+
+```
+
+
+There are quite a lot of light boxes on the graph - this suggests some keywords are highly correlated and we can cluster them together or group them under topics
+
+
+# Hierachical Clustering of Keywords
+
+Hierachical Clustering works based on the similarity among data points. A simple choice for a similarity measure would be Euclidean distance (straight-line distance between two points).
+
+The data point pair that has the closest distance between them will be placed together, and the process repeat until all data points are processed.
+
+Let’s run a hierachical clustering on the correlation matrix of our keywords (each word is represented by its correlations with the other words. if the vector of counts accross documents were used to represent keywords, they should probably be adjusted by normalization by keywords or documents for example):
+
+```{r}
+hc <-hclust(dist(cor.mat))  # run the hierachical clustering
+
+plot(hc, hang = -1, xlab = " ")  # plot the dendogram with all words at the bottom
+
+rect.hclust(hc, k = 4, border='red')  # plot the red frame # where k is the number of clusters
+
+```
+
+We get 4 clusters! The four clusters seem to represent ‘Countryside’, ‘Ski’, ‘Outdoors’ and ‘Historic’. Some manual reassignement could be applied if we wished.
+
+Let’s create a mapping table from our tree:
+
+```{r}
+clusters <- 4
+themes <- cutree(hc, k = clusters)  # Return each cluster based on the themes
+mat.themes=cbind(themes,t(mat))  # Add the column of themes to the termdocument matrix
+
+# Theme document matrix obtained by adding frequency of all words belonging to the themes
+thedm=aggregate(mat.themes[,-1],by=list("themes"=mat.themes[,"themes"]),sum)[,-1]
+# Manual assignement of the themes
+rownames(thedm) <- c("Historic","Countryside","Outdoors","Ski")
+thedm
+```
+
+# Ranking themes and destinations
+
+```{r}
+layout(matrix(1:20, nrow=4, ncol=5))
+par(mar=c(1,1,1,1))
+for (f in names(italy)) {
+  if (sum(thedm[,f]) != 0) {
+    pie(thedm[,f],labels=rownames(thedm))
+    title(f) 
+  }
+}
+```
+
